@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -18,6 +17,7 @@ from .agent import (
     pop_run_state,
     push_run_state,
     safe_read_text,
+    DEFAULT_FILE,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,9 +30,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
-
-
-DEFAULT_FILE = Path("files/example.py")
 
 
 def _load_default_file() -> tuple[str, str]:
