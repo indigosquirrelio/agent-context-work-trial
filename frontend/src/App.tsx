@@ -82,7 +82,7 @@ function App() {
 
     const loadDefault = async () => {
       try {
-        const response = await fetch(`$\{apiBase\}/api/file?path=$\{encodeURIComponent(DEFAULT_FILE_PATH)\}`)
+        const response = await fetch(`${apiBase}/api/file?path=${encodeURIComponent(DEFAULT_FILE_PATH)}`)
         if (!response.ok) {
           return
         }
