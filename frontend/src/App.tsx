@@ -25,21 +25,6 @@ type ChatResponse = {
   usage?: Record<string, number>
 }
 
-const inferLanguage = (path: string | null): string => {
-  if (!path) return 'plaintext'
-  const lower = path.toLowerCase()
-  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript'
-  if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript'
-  if (lower.endsWith('.py')) return 'python'
-  if (lower.endsWith('.json')) return 'json'
-  if (lower.endsWith('.md')) return 'markdown'
-  if (lower.endsWith('.css')) return 'css'
-  if (lower.endsWith('.html')) return 'html'
-  if (lower.endsWith('.rs')) return 'rust'
-  if (lower.endsWith('.go')) return 'go'
-  return 'plaintext'
-}
-
 const MessageBubble = () => (
   <MessagePrimitive.Root className="message-row">
     <MessagePrimitive.If user>
@@ -69,6 +54,7 @@ const Composer = () => (
 
 const apiBase = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8000'
 const DEFAULT_FILE_PATH = 'files/example.py'
+const EDITOR_LANGUAGE = 'python'
 
 function App() {
   const [conversationId] = useState(() => crypto.randomUUID())
@@ -209,8 +195,8 @@ function App() {
           <div className="editor-content">
             <Editor
               height="100%"
-              defaultLanguage="plaintext"
-              language={inferLanguage(editorPath)}
+              defaultLanguage="python"
+              language={EDITOR_LANGUAGE}
               value={editorContent}
               theme="vs-dark"
               options={{

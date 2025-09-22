@@ -18,6 +18,7 @@ WORKSPACE_ROOT = Path(
 DEFAULT_FILE_ENCODING = os.getenv("AGENT_FILE_ENCODING", "utf-8")
 MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
 MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o-mini"))
+DEFAULT_FILE = Path("files/example.py")
 
 
 @dataclass
@@ -102,6 +103,7 @@ def _model_from_name(name: str):
 
 INSTRUCTIONS = (
     "You are a precise file editing assistant working within a single project workspace. "
+    f"The primary artifact you maintain is '{DEFAULT_FILE}'; operate on that file unless the user explicitly requests another path. "
     "Use the read_file tool to inspect files before making changes. "
     "When updating a file, call edit_file with the complete desired contents for that file. "
     "Never guess the existing file body—always read it first unless you are creating a new file. "
