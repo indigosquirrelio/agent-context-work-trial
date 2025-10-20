@@ -1,20 +1,18 @@
-[project]
+[tool.poetry]
 name = "agent-backend"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "areke",email = "markpklein@gmail.com"}
-]
+authors = ["areke <markpklein@gmail.com>"]
 readme = "README.md"
-requires-python = "^3.11"
-dependencies = [
-    "fastapi (>=0.117.1,<0.118.0)",
-    "uvicorn[standard] (>=0.36.0,<0.37.0)",
-    "pydantic-ai (>=1.0.10,<2.0.0)",
-    "httpx (>=0.28.1,<0.29.0)"
-]
+packages = [{include = "agent_backend"}]
 
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.117.1"
+uvicorn = {extras = ["standard"], version = "^0.36.0"}
+pydantic-ai = "^1.0.10"
+httpx = "^0.28.1"
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
+requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
