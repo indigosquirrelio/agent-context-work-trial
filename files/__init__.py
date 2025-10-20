@@ -1,6 +1,1 @@
-fdsajf
-print("Helfdsalo, world!")
-
-yoooo
-
-dsafdsjaf
+print("Hello, world!")

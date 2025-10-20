@@ -12,7 +12,6 @@ from .agent import WORKSPACE_ROOT, DEFAULT_FILE_ENCODING, MAX_FILE_BYTES
 
 router = APIRouter(tags=["file-store"])
 
-# Store root is the 'files/' directory under the workspace by default
 STORE_ROOT = Path(os.getenv("FILE_STORE_ROOT", WORKSPACE_ROOT / "files")).resolve()
 
 
@@ -20,9 +19,7 @@ def _resolve_user_path(raw_path: str) -> Path:
     candidate = (WORKSPACE_ROOT / raw_path).resolve()
     if not candidate.is_relative_to(WORKSPACE_ROOT):
         raise HTTPException(status_code=400, detail="Path escapes workspace root")
-    # Also require files to live under STORE_ROOT for list/delete convenience
     if not candidate.is_relative_to(STORE_ROOT):
-        # allow creating under STORE_ROOT by passing a relative 'files/...' path
         raise HTTPException(status_code=400, detail=f"Path must be under '{STORE_ROOT.relative_to(WORKSPACE_ROOT)}'")
     return candidate
 

@@ -22,10 +22,8 @@ def _env_int(name: str, default: int) -> int:
 class ChaosConfig:
     base_url: str
     interval_seconds: int = 30
-    protect: tuple[str, ...] = ("files/example.py",)  # files we won't delete/update
+    protect: tuple[str, ...] = ("files/example.py",)
 
-
-# Cache of original files and their lines
 _original_files: dict[str, list[str]] = {}
 _all_lines: list[str] = []
 
@@ -57,20 +55,12 @@ async def _load_original_files(client: HTTPFileClient) -> None:
 def _random_filename_from_original() -> str:
     """Generate a filename based on a random original file."""
     if not _original_files:
-        # Fallback if no original files loaded
         rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
         return f"files/chaos_{rand}.py"
 
-    # Pick a random original file
     original_path = random.choice(list(_original_files.keys()))
-
-    # Extract just the filename (without path)
     original_name = original_path.split('/')[-1]
-
-    # Remove extension
     name_without_ext = original_name.rsplit('.', 1)[0] if '.' in original_name else original_name
-
-    # Add random suffix
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
     return f"files/{name_without_ext}_{rand}.py"
@@ -81,7 +71,6 @@ def _random_content_from_original() -> str:
     if not _original_files:
         return "# chaos file\n"
 
-    # Pick a random original file and copy ALL its content
     original_path = random.choice(list(_original_files.keys()))
     original_lines = _original_files[original_path]
 
@@ -97,10 +86,7 @@ def _swap_random_line(content: str) -> str:
     if not lines:
         return content
 
-    # Pick a random line index to replace
     idx = random.randrange(len(lines))
-
-    # Pick a random line from all original files
     replacement = random.choice(_all_lines)
 
     lines[idx] = replacement
@@ -113,16 +99,13 @@ def _eligible(files: Iterable[str], protect: set[str]) -> list[str]:
 
 
 async def _step(client: HTTPFileClient, cfg: ChaosConfig) -> str:
-    # Ensure there is some population
     files = await client.list_files()
     protect = set(cfg.protect)
     choices = ["create", "update", "delete"]
 
-    # If empty, force create
     if not files or not _eligible(files, protect):
         op = "create"
     else:
-        # bias towards updates a bit
         op = random.choices(choices, weights=[2, 5, 3], k=1)[0]
 
     if op == "create":
@@ -130,7 +113,6 @@ async def _step(client: HTTPFileClient, cfg: ChaosConfig) -> str:
         await client.write(path, _random_content_from_original())
         return f"create → {path}"
 
-    # pick eligible target
     pool = _eligible(files, protect)
     if not pool:
         path = _random_filename_from_original()
@@ -143,7 +125,6 @@ async def _step(client: HTTPFileClient, cfg: ChaosConfig) -> str:
         await client.delete(target)
         return f"delete → {target}"
 
-    # update: swap a random line with a line from original files
     body = (await client.read(target))["content"]
     body = _swap_random_line(body)
     await client.write(target, body)
@@ -159,7 +140,6 @@ async def main() -> None:
     client = HTTPFileClient.from_env()
     print(f"[chaos] targeting {cfg.base_url}, interval={cfg.interval_seconds}s, protect={cfg.protect}")
 
-    # Load original files once at startup
     await _load_original_files(client)
 
     try:

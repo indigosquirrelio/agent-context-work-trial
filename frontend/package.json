@@ -12,7 +12,6 @@
   "dependencies": {
     "@assistant-ui/react": "^0.11.15",
     "@monaco-editor/react": "^4.7.0",
-    "assistant-ui": "^0.0.59",
     "monaco-editor": "^0.53.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

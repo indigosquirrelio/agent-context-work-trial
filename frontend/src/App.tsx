@@ -21,6 +21,8 @@ type FileReadResponse = {
   etag: string
 }
 
+type ModelMessage = ModelRequest | ModelResponse
+
 type ChatResponse = {
   reply: string
   editor_path?: string | null
@@ -28,9 +30,6 @@ type ChatResponse = {
   usage?: Record<string, number>
   messages?: ModelMessage[]
 }
-
-// Pydantic-AI Message Types
-type ModelMessage = ModelRequest | ModelResponse
 
 type ModelRequest = {
   kind: 'request'
@@ -101,7 +100,6 @@ type ThinkingPart = {
   content: string
 }
 
-// Helper to format tool args for display
 const formatToolArgs = (args: string | Record<string, any> | null): string => {
   if (!args) return '{}'
   if (typeof args === 'string') {
@@ -114,12 +112,10 @@ const formatToolArgs = (args: string | Record<string, any> | null): string => {
   return JSON.stringify(args, null, 2)
 }
 
-// Render a single message part
 const MessagePartDisplay = ({ part }: { part: ModelRequestPart | ModelResponsePart }) => {
   switch (part.part_kind) {
     case 'user-prompt':
       const content = typeof part.content === 'string' ? part.content : JSON.stringify(part.content)
-      // Filter out the context injection
       const cleanContent = content.replace(/^\[User is viewing: [^\]]+\]\n/, '')
       return (
         <div className="message-bubble message-bubble--user">
@@ -172,7 +168,6 @@ const MessagePartDisplay = ({ part }: { part: ModelRequestPart | ModelResponsePa
 
     case 'system-prompt':
     case 'retry-prompt':
-      // Don't display system prompts and retries in the UI
       return null
 
     default:
@@ -267,7 +262,6 @@ const FileTreeItem = ({
   onFileClick: (path: string) => void
   depth?: number
 }) => {
-  // Check if this folder contains the current file
   const containsCurrentFile = React.useMemo(() => {
     if (node.isFile) return false
     return currentFile.startsWith(node.path + '/')
@@ -275,7 +269,6 @@ const FileTreeItem = ({
 
   const [isOpen, setIsOpen] = React.useState(containsCurrentFile)
 
-  // Auto-expand when currentFile changes and this folder contains it
   React.useEffect(() => {
     if (containsCurrentFile) {
       setIsOpen(true)
@@ -362,10 +355,12 @@ function App() {
   const dirtyRef = useRef(dirty)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
+  const etagRef = useRef(remoteEtags)
+  useEffect(() => { etagRef.current = remoteEtags }, [remoteEtags])
+
   const onSaveRef = useRef<() => void>()
   const onReloadRef = useRef<() => void>()
 
-  // Define save handler
   const onSave = async () => {
     setSaving(true)
     setError('')
@@ -381,7 +376,6 @@ function App() {
     }
   }
 
-  // Define reload handler (declared early for ref)
   const onReloadHandler = async () => {
     try {
       const data = await readFromStore(currentFile)
@@ -394,28 +388,23 @@ function App() {
     }
   }
 
-  // Keep refs updated
   useEffect(() => {
     onSaveRef.current = onSave
     onReloadRef.current = onReloadHandler
   })
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Keyboard shortcuts: Cmd+S to save, Cmd+R to reload
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd+S / Ctrl+S to save
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
         if (dirtyRef.current && onSaveRef.current) {
           onSaveRef.current()
         }
       }
-      // Cmd+R / Ctrl+R to reload
       if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
         e.preventDefault()
         if (onReloadRef.current) {
@@ -428,7 +417,6 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  // Load file list on mount
   useEffect(() => {
     let cancelled = false
     const loadFiles = async () => {
@@ -445,7 +433,6 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
-  // Load initial file content
   useEffect(() => {
     let cancelled = false
     const loadFile = async () => {
@@ -465,27 +452,31 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
-  // Lightweight polling: fetch latest content and file list, if changed and we are NOT dirty, update
   useEffect(() => {
+    let cancelled = false
     const id = setInterval(async () => {
+      const ctrl = new AbortController()
       try {
-        // Refresh file list
         const fileList = await listFiles()
-        setFiles(fileList)
+        if (!cancelled) setFiles(fileList)
 
-        // Refresh current file content if not dirty
         const data = await readFromStore(currentFile)
-        const currentEtag = remoteEtags[currentFile]
-        if (data.etag !== currentEtag && !dirtyRef.current) {
+        const currentEtag = etagRef.current[currentFile]
+        if (data.etag !== currentEtag && !dirtyRef.current && !cancelled) {
           setFileContents(prev => ({ ...prev, [data.path]: data.content }))
           setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
         }
       } catch {
-        /* ignore */
+        /* ignore polling errors */
+      } finally {
+        ctrl.abort()
       }
     }, POLL_MS)
-    return () => clearInterval(id)
-  }, [currentFile, remoteEtags])
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [currentFile])
 
   const onChange: OnChange = (value) => {
     if (value !== undefined) {
@@ -496,8 +487,10 @@ function App() {
 
   const switchFile = async (filePath: string) => {
     if (filePath === currentFile) return
+    if (dirtyRef.current) {
+      console.warn('Switching files discards unsaved changes.')
+    }
 
-    // Load file content if not already loaded
     if (!fileContents[filePath]) {
       try {
         const data = await readFromStore(filePath)
@@ -531,7 +524,6 @@ function App() {
     return langMap[ext || ''] || 'plaintext'
   }
 
-  // Hook the chat adapter (unchanged except for var deref)
   const chatAdapter = useMemo<ChatModelAdapter>(() => {
     const adapter: ChatModelAdapter = {
       async run({ messages, abortSignal }): Promise<ChatModelRunResult> {
@@ -549,7 +541,6 @@ function App() {
           }
         }
 
-        // Immediately add user message to display
         const userMessage: ModelRequest = {
           kind: 'request',
           parts: [{
@@ -577,7 +568,6 @@ function App() {
           const data = (await response.json()) as ChatResponse
           if (abortSignal.aborted) throw new DOMException('Run aborted', 'AbortError')
 
-          // Store messages from backend
           if (data.messages) {
             setMessages(data.messages)
           }
@@ -587,7 +577,6 @@ function App() {
             setCurrentFile(data.editor_path)
           }
 
-          // After agent write, refresh ETag if we can
           try {
             const path = data.editor_path ?? currentFile
             const read = await readFromStore(path)
@@ -655,6 +644,7 @@ function App() {
               height="100%"
               path={currentFile}
               defaultLanguage={getLanguageFromPath(currentFile)}
+              language={getLanguageFromPath(currentFile)}
               value={fileContents[currentFile] || ''}
               theme="vs-dark"
               onChange={onChange}

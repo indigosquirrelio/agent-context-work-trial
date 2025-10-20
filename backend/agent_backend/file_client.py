@@ -6,7 +6,6 @@ from typing import Any, Optional
 
 import httpx
 
-# One shared AsyncClient for the whole process
 _shared_client: Optional[httpx.AsyncClient] = None
 
 
@@ -18,7 +17,6 @@ def _get_shared_client() -> httpx.AsyncClient:
 
 
 def _base_url_from_env() -> str:
-    # File server is mounted under /files on the same FastAPI app by default
     return os.getenv("FILE_STORE_URL", "http://localhost:8000/files").rstrip("/")
 
 

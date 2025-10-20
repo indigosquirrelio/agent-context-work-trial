@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+from httpx import HTTPStatusError
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -33,15 +34,18 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-# Mount the file store under /files
 app.include_router(files_router, prefix="/files")
 
 
-def _load_default_file() -> tuple[str, str]:
-    """Return the default file contents relative to the workspace."""
-
-    content, resolved = safe_read_text(str(DEFAULT_FILE))
-    return content, str(resolved.relative_to(WORKSPACE_ROOT))
+async def _load_default_file() -> tuple[str, str]:
+    """Return the default file via the HTTP file store (fallback to disk)."""
+    client = HTTPFileClient.from_env()
+    try:
+        data = await client.read(str(DEFAULT_FILE))
+        return data["content"], data["path"]
+    except Exception:
+        content, resolved = safe_read_text(str(DEFAULT_FILE))
+        return content, str(resolved.relative_to(WORKSPACE_ROOT))
 
 
 @dataclass
@@ -72,7 +76,7 @@ class ChatResponse(BaseModel):
     editor_path: Optional[str] = None
     editor_content: Optional[str] = None
     usage: Optional[ChatUsage] = None
-    messages: Optional[list] = None  # Serialized ModelMessage list
+    messages: Optional[list[dict]] = None  # Serialized ModelMessage list
 
 
 class FileResponse(BaseModel):
@@ -91,6 +95,8 @@ async def read_file(path: str, encoding: Optional[str] = None) -> FileResponse:
     try:
         data = await client.read(path, encoding)
         return FileResponse(path=data["path"], content=data["content"])
+    except HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}") from exc
 
@@ -99,7 +105,7 @@ async def read_file(path: str, encoding: Optional[str] = None) -> FileResponse:
 async def conversation_state(conversation_id: str) -> ChatResponse:
     state = _conversations.get(conversation_id)
     if not state:
-        content, relative = _load_default_file()
+        content, relative = await _load_default_file()
         state = ConversationState(editor_path=relative, editor_content=content)
         _conversations[conversation_id] = state
 
@@ -119,11 +125,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     state = _conversations.get(request.conversation_id)
     if state is None:
-        content, relative = _load_default_file()
+        content, relative = await _load_default_file()
         state = ConversationState(editor_path=relative, editor_content=content)
         _conversations[request.conversation_id] = state
 
-    # Update the current file context if provided
     if request.current_file:
         state.editor_path = request.current_file
 
@@ -131,7 +136,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
     token = push_run_state(run_state)
 
     try:
-        # Prepend context about the current file to help the agent
         contextual_message = f"[User is viewing: {state.editor_path}]\n{message}"
 
         run_result = await agent.run(
@@ -167,9 +171,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
     }
     usage = ChatUsage(**usage_values)
 
-    # Serialize all messages for the frontend
-    messages_json = ModelMessagesTypeAdapter.dump_json(state.messages)
-    messages_list = json.loads(messages_json)
+    raw_json = ModelMessagesTypeAdapter.dump_json(state.messages)
+    messages_list = json.loads(raw_json)
+    for m in messages_list:
+        parts = m.get("parts")
+        if isinstance(parts, list):
+            m["parts"] = [p for p in parts if getattr(p, "part_kind", p.get("part_kind", None)) != "thinking"]
 
     return ChatResponse(
         reply=reply_text or "(no response)",

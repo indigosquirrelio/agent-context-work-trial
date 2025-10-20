@@ -8,14 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from .file_client import HTTPFileClient
 
 logger = logging.getLogger(__name__)
 
-# Workspace and model configuration --------------------------------------------------
 WORKSPACE_ROOT = Path(
     os.getenv("AGENT_WORKSPACE_ROOT", Path(__file__).resolve().parents[2])
 ).resolve()
@@ -24,59 +22,6 @@ MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
 MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o-mini"))
 DEFAULT_FILE = Path("files/__init__.py")
 FILE_STORE_URL = os.getenv("FILE_STORE_URL")
-
-
-class FileEditInput(BaseModel):
-    """Input for editing files in a container."""
-
-    filepath: str = Field(
-        description="""Path to the file to create or modify.
-
-        Can be either absolute (e.g., /workdir/myfile.txt) or relative to default_workdir if set.
-
-        Note: Parent directories are created automatically
-        """
-    )
-
-    edit_instructions: Optional[List[str]] = Field(
-        default=None,
-        description="""List of search/replace blocks for editing existing files.
-
-Each string in the list should be a complete search/replace block in Cline format:
-```
-<<<<<<< SEARCH
-old code here
-=======
-new code here
->>>>>>> REPLACE
-```
-
-Example: edit_instructions = ["<<<<<<< SEARCH\\nold code\\n=======\\nnew code\\n>>>>>>> REPLACE"]
-Provide as a LIST of strings, even for single edits.
-
-For NEW file creation, leave this as None and use 'content' instead.
-        """
-    )
-
-    content: Optional[str] = Field(
-        default=None,
-        description="""Complete file content for NEW file creation.
-
-        Usage:
-        - For creating new files: provide complete content here and leave edit_instructions as None
-        - For editing existing files: leave this as None and use edit_instructions instead
-
-        Preserves formatting and structure.
-        """
-    )
-
-    description: str = Field(
-        description="""A clear description of the changes being made.
-
-        Explain the purpose of the change and provide context for why this change is necessary.
-        Think of this like a detailed commit message for the change you're making.
-        """
-    )
 
 
 @dataclass
@@ -164,7 +109,8 @@ def _parse_search_replace_block(block: str) -> tuple[str, str]:
     Returns:
         tuple of (search_text, replace_text)
     """
-    pattern = r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE"
+    block = block.replace("\r\n", "\n")
+    pattern = r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE\r?\n?"
     match = re.search(pattern, block, re.DOTALL)
     if not match:
         raise ValueError(
@@ -201,7 +147,7 @@ def _apply_edit_instructions(content: str, edit_instructions: List[str]) -> str:
     Raises:
         ValueError: If any edit instruction is invalid or cannot be applied
     """
-    result = content
+    result = content.replace("\r\n", "\n")
     for i, block in enumerate(edit_instructions):
         try:
             search, replace = _parse_search_replace_block(block)
@@ -282,7 +228,6 @@ async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = 
     except Exception as e:
         raise ValueError(f"File '{path}' does not exist or cannot be read: {e}") from None
     if state:
-        # Record a synthetic "resolved" path relative to workspace
         state.record(WORKSPACE_ROOT / data["path"], data["content"], "read")
     return data["content"]
 
@@ -332,7 +277,6 @@ async def edit_file(
     state = _current_state()
     client = HTTPFileClient.from_env()
 
-    # Validate input
     if content is not None and edit_instructions is not None:
         raise ValueError(
             "Cannot specify both 'content' and 'edit_instructions'. "
@@ -346,11 +290,9 @@ async def edit_file(
     final_content: str
 
     if content is not None:
-        # Creating a new file
         final_content = content
         action = "create"
     else:
-        # Editing existing file - read current content first
         try:
             data = await client.read(filepath, encoding)
             current_content = data["content"]
@@ -360,7 +302,6 @@ async def edit_file(
                 f"To create a new file, use 'content' instead of 'edit_instructions'. Error: {e}"
             ) from None
 
-        # Apply search/replace blocks
         try:
             final_content = _apply_edit_instructions(current_content, edit_instructions)  # type: ignore
         except ValueError as e:
@@ -368,7 +309,6 @@ async def edit_file(
 
         action = "edit"
 
-    # Write the final content
     try:
         data = await client.write(filepath, final_content, encoding)
     except Exception as e:
