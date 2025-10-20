@@ -26,22 +26,179 @@ type ChatResponse = {
   editor_path?: string | null
   editor_content?: string | null
   usage?: Record<string, number>
+  messages?: ModelMessage[]
 }
 
-const MessageBubble = () => (
-  <MessagePrimitive.Root className="message-row">
-    <MessagePrimitive.If user>
-      <div className="message-bubble message-bubble--user">
-        <MessagePrimitive.Parts />
-      </div>
-    </MessagePrimitive.If>
-    <MessagePrimitive.If assistant>
-      <div className="message-bubble message-bubble--assistant">
-        <MessagePrimitive.Parts />
-      </div>
-    </MessagePrimitive.If>
-  </MessagePrimitive.Root>
-)
+// Pydantic-AI Message Types
+type ModelMessage = ModelRequest | ModelResponse
+
+type ModelRequest = {
+  kind: 'request'
+  parts: ModelRequestPart[]
+  instructions?: string | null
+}
+
+type ModelResponse = {
+  kind: 'response'
+  parts: ModelResponsePart[]
+  usage: any
+  model_name?: string | null
+  timestamp: string
+}
+
+type ModelRequestPart =
+  | SystemPromptPart
+  | UserPromptPart
+  | ToolReturnPart
+  | RetryPromptPart
+
+type ModelResponsePart =
+  | TextPart
+  | ToolCallPart
+  | ThinkingPart
+
+type SystemPromptPart = {
+  part_kind: 'system-prompt'
+  content: string
+  timestamp: string
+}
+
+type UserPromptPart = {
+  part_kind: 'user-prompt'
+  content: string | any[]
+  timestamp: string
+}
+
+type ToolReturnPart = {
+  part_kind: 'tool-return'
+  tool_name: string
+  content: any
+  tool_call_id: string
+  timestamp: string
+}
+
+type RetryPromptPart = {
+  part_kind: 'retry-prompt'
+  content: any
+  tool_call_id: string
+  timestamp: string
+}
+
+type TextPart = {
+  part_kind: 'text'
+  content: string
+}
+
+type ToolCallPart = {
+  part_kind: 'tool-call'
+  tool_name: string
+  args: string | Record<string, any> | null
+  tool_call_id: string
+}
+
+type ThinkingPart = {
+  part_kind: 'thinking'
+  content: string
+}
+
+// Helper to format tool args for display
+const formatToolArgs = (args: string | Record<string, any> | null): string => {
+  if (!args) return '{}'
+  if (typeof args === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(args), null, 2)
+    } catch {
+      return args
+    }
+  }
+  return JSON.stringify(args, null, 2)
+}
+
+// Render a single message part
+const MessagePartDisplay = ({ part }: { part: ModelRequestPart | ModelResponsePart }) => {
+  switch (part.part_kind) {
+    case 'user-prompt':
+      const content = typeof part.content === 'string' ? part.content : JSON.stringify(part.content)
+      // Filter out the context injection
+      const cleanContent = content.replace(/^\[User is viewing: [^\]]+\]\n/, '')
+      return (
+        <div className="message-bubble message-bubble--user">
+          <div className="message-content">{cleanContent}</div>
+        </div>
+      )
+
+    case 'text':
+      return (
+        <div className="message-bubble message-bubble--assistant">
+          <div className="message-content">{part.content}</div>
+        </div>
+      )
+
+    case 'tool-call':
+      return (
+        <div className="message-tool-call">
+          <div className="tool-header">
+            <span className="tool-icon">🔧</span>
+            <span className="tool-name">{part.tool_name}</span>
+          </div>
+          <pre className="tool-args">{formatToolArgs(part.args)}</pre>
+        </div>
+      )
+
+    case 'tool-return':
+      const returnContent = typeof part.content === 'string'
+        ? part.content
+        : JSON.stringify(part.content, null, 2)
+      return (
+        <div className="message-tool-return">
+          <div className="tool-header">
+            <span className="tool-icon">✓</span>
+            <span className="tool-name">{part.tool_name} result</span>
+          </div>
+          <pre className="tool-result">{returnContent}</pre>
+        </div>
+      )
+
+    case 'thinking':
+      return (
+        <div className="message-thinking">
+          <div className="thinking-header">
+            <span className="thinking-icon">💭</span>
+            <span>Thinking...</span>
+          </div>
+          <div className="thinking-content">{part.content}</div>
+        </div>
+      )
+
+    case 'system-prompt':
+    case 'retry-prompt':
+      // Don't display system prompts and retries in the UI
+      return null
+
+    default:
+      return null
+  }
+}
+
+const CustomMessage = ({ message }: { message: ModelMessage }) => {
+  if (message.kind === 'request') {
+    return (
+      <>
+        {message.parts.map((part, idx) => (
+          <MessagePartDisplay key={idx} part={part} />
+        ))}
+      </>
+    )
+  } else {
+    return (
+      <>
+        {message.parts.map((part, idx) => (
+          <MessagePartDisplay key={idx} part={part} />
+        ))}
+      </>
+    )
+  }
+}
 
 const Composer = () => (
   <ComposerPrimitive.Root className="composer">
@@ -57,7 +214,7 @@ const Composer = () => (
 
 const apiBase = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8000'
 const filesBase = `${apiBase}/files`
-const DEFAULT_FILE_PATH = 'files/pydantic-ai-main/pydantic_ai_slim/pydantic_ai/agent/abstract.py'
+const DEFAULT_FILE_PATH = 'files/__init__.py'
 const EDITOR_LANGUAGE = 'python'
 const POLL_MS = 5000
 
@@ -198,8 +355,10 @@ function App() {
   const [dirty, setDirty] = useState<boolean>(false)
   const [saving, setSaving] = useState<boolean>(false)
   const [error, setError] = useState<string>('')
+  const [messages, setMessages] = useState<ModelMessage[]>([])
 
   const editorRef = useRef<any>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   const dirtyRef = useRef(dirty)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
@@ -240,6 +399,11 @@ function App() {
     onSaveRef.current = onSave
     onReloadRef.current = onReloadHandler
   })
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   // Keyboard shortcuts: Cmd+S to save, Cmd+R to reload
   useEffect(() => {
@@ -301,10 +465,15 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
-  // Lightweight polling: fetch latest content, if it changed and we are NOT dirty, update
+  // Lightweight polling: fetch latest content and file list, if changed and we are NOT dirty, update
   useEffect(() => {
     const id = setInterval(async () => {
       try {
+        // Refresh file list
+        const fileList = await listFiles()
+        setFiles(fileList)
+
+        // Refresh current file content if not dirty
         const data = await readFromStore(currentFile)
         const currentEtag = remoteEtags[currentFile]
         if (data.etag !== currentEtag && !dirtyRef.current) {
@@ -380,17 +549,38 @@ function App() {
           }
         }
 
+        // Immediately add user message to display
+        const userMessage: ModelRequest = {
+          kind: 'request',
+          parts: [{
+            part_kind: 'user-prompt',
+            content: text,
+            timestamp: new Date().toISOString()
+          }],
+          instructions: null
+        }
+        setMessages(prev => [...prev, userMessage])
+
         try {
           const response = await fetch(`${apiBase}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ conversation_id: conversationId, message: text }),
+            body: JSON.stringify({
+              conversation_id: conversationId,
+              message: text,
+              current_file: currentFile
+            }),
             signal: abortSignal,
           })
 
           if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`)
           const data = (await response.json()) as ChatResponse
           if (abortSignal.aborted) throw new DOMException('Run aborted', 'AbortError')
+
+          // Store messages from backend
+          if (data.messages) {
+            setMessages(data.messages)
+          }
 
           if (data.editor_content && data.editor_path) {
             setFileContents(prev => ({ ...prev, [data.editor_path!]: data.editor_content! }))
@@ -481,14 +671,14 @@ function App() {
 
         <section className="chat-pane">
           <div className="chat-pane__inner">
-            <ThreadPrimitive.Root className="thread-root">
-              <ThreadPrimitive.Viewport className="thread-viewport">
-                <ThreadPrimitive.Messages components={{ Message: MessageBubble }} />
-              </ThreadPrimitive.Viewport>
-              <ThreadPrimitive.ScrollToBottom className="scroll-button">
-                Scroll to bottom
-              </ThreadPrimitive.ScrollToBottom>
-            </ThreadPrimitive.Root>
+            <div className="thread-root">
+              <div className="thread-viewport">
+                {messages.map((message, idx) => (
+                  <CustomMessage key={idx} message={message} />
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
             <Composer />
           </div>
         </section>

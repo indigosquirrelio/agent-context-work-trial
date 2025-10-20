@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from .file_client import HTTPFileClient
@@ -20,14 +22,68 @@ WORKSPACE_ROOT = Path(
 DEFAULT_FILE_ENCODING = os.getenv("AGENT_FILE_ENCODING", "utf-8")
 MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
 MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o-mini"))
-DEFAULT_FILE = Path("files/example.py")
+DEFAULT_FILE = Path("files/__init__.py")
 FILE_STORE_URL = os.getenv("FILE_STORE_URL")
+
+
+class FileEditInput(BaseModel):
+    """Input for editing files in a container."""
+
+    filepath: str = Field(
+        description="""Path to the file to create or modify.
+
+        Can be either absolute (e.g., /workdir/myfile.txt) or relative to default_workdir if set.
+
+        Note: Parent directories are created automatically
+        """
+    )
+
+    edit_instructions: Optional[List[str]] = Field(
+        default=None,
+        description="""List of search/replace blocks for editing existing files.
+
+Each string in the list should be a complete search/replace block in Cline format:
+```
+<<<<<<< SEARCH
+old code here
+=======
+new code here
+>>>>>>> REPLACE
+```
+
+Example: edit_instructions = ["<<<<<<< SEARCH\\nold code\\n=======\\nnew code\\n>>>>>>> REPLACE"]
+Provide as a LIST of strings, even for single edits.
+
+For NEW file creation, leave this as None and use 'content' instead.
+        """
+    )
+
+    content: Optional[str] = Field(
+        default=None,
+        description="""Complete file content for NEW file creation.
+
+        Usage:
+        - For creating new files: provide complete content here and leave edit_instructions as None
+        - For editing existing files: leave this as None and use edit_instructions instead
+
+        Preserves formatting and structure.
+        """
+    )
+
+    description: str = Field(
+        description="""A clear description of the changes being made.
+
+        Explain the purpose of the change and provide context for why this change is necessary.
+        Think of this like a detailed commit message for the change you're making.
+        """
+    )
 
 
 @dataclass
 class ToolRunState:
     """Captures file interactions during a single agent run."""
 
+    current_file: Optional[str] = None
     last_path: Optional[str] = None
     last_content: Optional[str] = None
     actions: list[str] = field(default_factory=list)
@@ -95,35 +151,112 @@ def _use_http_store() -> bool:
     return bool(FILE_STORE_URL)
 
 
-def _model_from_name(name: str):
-    if name.lower() == "test":
-        from pydantic_ai.models.test import TestModel
+def _parse_search_replace_block(block: str) -> tuple[str, str]:
+    """Parse a single search/replace block in Cline format.
 
-        return TestModel(
-            call_tools=[],
-            custom_output_text=(
-                "This is the built-in test model. Set AGENT_MODEL to a real provider (for example 'openai:gpt-4o-mini') to enable tool-using conversations."
-            ),
+    Expected format:
+    <<<<<<< SEARCH
+    old code here
+    =======
+    new code here
+    >>>>>>> REPLACE
+
+    Returns:
+        tuple of (search_text, replace_text)
+    """
+    pattern = r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE"
+    match = re.search(pattern, block, re.DOTALL)
+    if not match:
+        raise ValueError(
+            "No match found or invalid search/replace block format. Expected:\n"
+            "<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE"
         )
+    return match.group(1), match.group(2)
+
+
+def _apply_search_replace(content: str, search: str, replace: str) -> str:
+    """Apply a single search/replace operation to content.
+
+    Raises:
+        ValueError: If search text is not found or found multiple times
+    """
+    count = content.count(search)
+    if count == 0:
+        raise ValueError(f"Search text not found in file:\n{search}")
+    if count > 1:
+        raise ValueError(f"Search text found {count} times (must be unique):\n{search}")
+    return content.replace(search, replace, 1)
+
+
+def _apply_edit_instructions(content: str, edit_instructions: List[str]) -> str:
+    """Apply a list of search/replace blocks to content.
+
+    Args:
+        content: Original file content
+        edit_instructions: List of search/replace blocks in Cline format
+
+    Returns:
+        Modified content after applying all edits
+
+    Raises:
+        ValueError: If any edit instruction is invalid or cannot be applied
+    """
+    result = content
+    for i, block in enumerate(edit_instructions):
+        try:
+            search, replace = _parse_search_replace_block(block)
+            result = _apply_search_replace(result, search, replace)
+        except ValueError as e:
+            raise ValueError(f"Error in edit instruction {i + 1}: {e}") from e
+    return result
+
+
+def _model_from_name(name: str):
     return name
 
 
-INSTRUCTIONS = (
-    "You are a precise file editing assistant working within a single project workspace. "
-    f"The primary artifact you maintain is '{DEFAULT_FILE}'; operate on that file unless the user explicitly requests another path. "
-    "Use the read_file tool to inspect files before making changes. "
-    "When updating a file, call edit_file with the complete desired contents for that file. "
-    "Never guess the existing file body—always read it first unless you are creating a new file. "
-    "All file paths must remain relative to the workspace root."
-)
+INSTRUCTIONS = """You are a precise file editing assistant working within a single project workspace.
 
+File Operations:
+1. Reading files: Use read_file(path="...") to inspect file contents
+2. Editing existing files: Use edit_file with search/replace blocks
+3. Creating new files: Use edit_file with complete content
+
+Editing Existing Files:
+- ALWAYS read the file first with read_file to see current contents
+- Use edit_instructions with search/replace blocks in this format:
+  <<<<<<< SEARCH
+  exact code to find
+  =======
+  new code to replace it with
+  >>>>>>> REPLACE
+- The SEARCH block must match EXACTLY (including whitespace/indentation)
+- Each SEARCH must be unique in the file
+- You can provide multiple search/replace blocks in the edit_instructions list
+- Always provide a clear description of what changes you're making
+
+Creating New Files:
+- Use the content parameter with complete file contents
+- Leave edit_instructions as None
+- Provide a description of what the file does
+
+File Paths:
+- All file paths must be relative to the workspace root
+- When the user message includes "[User is viewing: filepath]", that's the current file context
+- Always use explicit file paths in tool calls
+
+Best Practices:
+- Never guess file contents - always read first
+- Make surgical edits with search/replace blocks rather than replacing entire files
+- Provide clear descriptions for all edits
+"""
 
 
 def _build_agent(model_name: str) -> Agent:
     try:
         return Agent(
             _model_from_name(model_name),
-            instructions=INSTRUCTIONS,
+            system_prompt=INSTRUCTIONS,
             name="workspace-editor",
         )
     except Exception as exc:  # pragma: no cover - surface configuration issues early
@@ -136,7 +269,12 @@ agent = _build_agent(MODEL_NAME)
 
 @agent.tool
 async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = None) -> str:
-    """Return the contents of a UTF-8 text file."""
+    """Return the contents of a UTF-8 text file.
+
+    Args:
+        path: Path to the file (required).
+        encoding: Text encoding (default: utf-8)
+    """
     state = _current_state()
     client = HTTPFileClient.from_env()
     try:
@@ -152,20 +290,97 @@ async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = 
 @agent.tool
 async def edit_file(
     ctx: RunContext[None],
-    path: str,
-    content: str,
+    filepath: str,
+    description: str,
+    edit_instructions: Optional[List[str]] = None,
+    content: Optional[str] = None,
     encoding: Optional[str] = None,
 ) -> str:
-    """Replace the entire contents of a text file with the provided string."""
+    """Create a new file or edit an existing file.
+
+    For NEW files:
+    - Set filepath to the desired path
+    - Set content to the complete file contents
+    - Leave edit_instructions as None
+    - Provide a description of what the file does
+
+    For EDITING existing files:
+    - Set filepath to the file to edit
+    - Set edit_instructions to a list of search/replace blocks
+    - Leave content as None
+    - Provide a description of the changes
+
+    Search/replace block format:
+    ```
+    <<<<<<< SEARCH
+    old code here
+    =======
+    new code here
+    >>>>>>> REPLACE
+    ```
+
+    Args:
+        filepath: Path to the file to create or modify
+        description: A clear description of the changes being made
+        edit_instructions: List of search/replace blocks for editing existing files (optional)
+        content: Complete file content for NEW file creation (optional)
+        encoding: Text encoding (default: utf-8)
+
+    Returns:
+        Success message describing what was done
+    """
     state = _current_state()
     client = HTTPFileClient.from_env()
+
+    # Validate input
+    if content is not None and edit_instructions is not None:
+        raise ValueError(
+            "Cannot specify both 'content' and 'edit_instructions'. "
+            "Use 'content' for new files, 'edit_instructions' for editing existing files."
+        )
+    if content is None and edit_instructions is None:
+        raise ValueError(
+            "Must specify either 'content' (for new files) or 'edit_instructions' (for edits)."
+        )
+
+    final_content: str
+
+    if content is not None:
+        # Creating a new file
+        final_content = content
+        action = "create"
+    else:
+        # Editing existing file - read current content first
+        try:
+            data = await client.read(filepath, encoding)
+            current_content = data["content"]
+        except Exception as e:
+            raise ValueError(
+                f"Cannot edit '{filepath}': file does not exist or cannot be read. "
+                f"To create a new file, use 'content' instead of 'edit_instructions'. Error: {e}"
+            ) from None
+
+        # Apply search/replace blocks
+        try:
+            final_content = _apply_edit_instructions(current_content, edit_instructions)  # type: ignore
+        except ValueError as e:
+            raise ValueError(f"Failed to apply edits to '{filepath}': {e}") from None
+
+        action = "edit"
+
+    # Write the final content
     try:
-        data = await client.write(path, content, encoding)
+        data = await client.write(filepath, final_content, encoding)
     except Exception as e:
-        raise ValueError(f"Unable to write '{path}': {e}") from None
+        raise ValueError(f"Unable to write '{filepath}': {e}") from None
+
     if state:
-        state.record(WORKSPACE_ROOT / data["path"], data["content"], "edit")
-    return f"Updated {path}"
+        state.record(WORKSPACE_ROOT / data["path"], data["content"], action)
+
+    if action == "create":
+        return f"Created {filepath}: {description}"
+    else:
+        return f"Updated {filepath}: {description}"
 
 
 @agent.tool

@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from .agent import (
     WORKSPACE_ROOT,
@@ -57,6 +57,7 @@ _conversations: Dict[str, ConversationState] = {}
 class ChatRequest(BaseModel):
     conversation_id: str = Field(..., alias="conversation_id")
     message: str
+    current_file: Optional[str] = None
 
 
 class ChatUsage(BaseModel):
@@ -71,6 +72,7 @@ class ChatResponse(BaseModel):
     editor_path: Optional[str] = None
     editor_content: Optional[str] = None
     usage: Optional[ChatUsage] = None
+    messages: Optional[list] = None  # Serialized ModelMessage list
 
 
 class FileResponse(BaseModel):
@@ -120,12 +122,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
         content, relative = _load_default_file()
         state = ConversationState(editor_path=relative, editor_content=content)
         _conversations[request.conversation_id] = state
-    run_state = ToolRunState()
+
+    # Update the current file context if provided
+    if request.current_file:
+        state.editor_path = request.current_file
+
+    run_state = ToolRunState(current_file=state.editor_path)
     token = push_run_state(run_state)
 
     try:
+        # Prepend context about the current file to help the agent
+        contextual_message = f"[User is viewing: {state.editor_path}]\n{message}"
+
         run_result = await agent.run(
-            message,
+            contextual_message,
             message_history=state.messages if state.messages else None,
         )
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -157,11 +167,16 @@ async def chat(request: ChatRequest) -> ChatResponse:
     }
     usage = ChatUsage(**usage_values)
 
+    # Serialize all messages for the frontend
+    messages_json = ModelMessagesTypeAdapter.dump_json(state.messages)
+    messages_list = json.loads(messages_json)
+
     return ChatResponse(
         reply=reply_text or "(no response)",
         editor_path=state.editor_path,
         editor_content=state.editor_content,
         usage=usage,
+        messages=messages_list,
     )
 
 
