@@ -19,6 +19,8 @@ from .agent import (
     safe_read_text,
     DEFAULT_FILE,
 )
+from .file_server import router as files_router
+from .file_client import HTTPFileClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,9 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+# Mount the file store under /files
+app.include_router(files_router, prefix="/files")
 
 
 def _load_default_file() -> tuple[str, str]:
@@ -80,15 +85,12 @@ def health() -> dict[str, str]:
 
 @app.get("/api/file", response_model=FileResponse)
 async def read_file(path: str, encoding: Optional[str] = None) -> FileResponse:
+    client = HTTPFileClient.from_env()
     try:
-        content, resolved = safe_read_text(path, encoding)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    relative = str(resolved.relative_to(WORKSPACE_ROOT))
-    return FileResponse(path=relative, content=content)
+        data = await client.read(path, encoding)
+        return FileResponse(path=data["path"], content=data["content"])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}") from exc
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=ChatResponse)

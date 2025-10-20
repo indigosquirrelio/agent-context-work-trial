@@ -9,6 +9,8 @@ from typing import Optional
 
 from pydantic_ai import Agent, RunContext
 
+from .file_client import HTTPFileClient
+
 logger = logging.getLogger(__name__)
 
 # Workspace and model configuration --------------------------------------------------
@@ -19,6 +21,7 @@ DEFAULT_FILE_ENCODING = os.getenv("AGENT_FILE_ENCODING", "utf-8")
 MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
 MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o-mini"))
 DEFAULT_FILE = Path("files/example.py")
+FILE_STORE_URL = os.getenv("FILE_STORE_URL")
 
 
 @dataclass
@@ -88,6 +91,10 @@ def _ensure_parent(path: Path) -> None:
         raise ValueError(f"Unable to prepare directories for '{path}'") from exc
 
 
+def _use_http_store() -> bool:
+    return bool(FILE_STORE_URL)
+
+
 def _model_from_name(name: str):
     if name.lower() == "test":
         from pydantic_ai.models.test import TestModel
@@ -130,16 +137,16 @@ agent = _build_agent(MODEL_NAME)
 @agent.tool
 async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = None) -> str:
     """Return the contents of a UTF-8 text file."""
-
-    try:
-        contents, resolved = safe_read_text(path, encoding)
-    except FileNotFoundError:
-        raise ValueError(f"File '{path}' does not exist") from None
-
     state = _current_state()
+    client = HTTPFileClient.from_env()
+    try:
+        data = await client.read(path, encoding)
+    except Exception as e:
+        raise ValueError(f"File '{path}' does not exist or cannot be read: {e}") from None
     if state:
-        state.record(resolved, contents, "read")
-    return contents
+        # Record a synthetic "resolved" path relative to workspace
+        state.record(WORKSPACE_ROOT / data["path"], data["content"], "read")
+    return data["content"]
 
 
 @agent.tool
@@ -150,20 +157,23 @@ async def edit_file(
     encoding: Optional[str] = None,
 ) -> str:
     """Replace the entire contents of a text file with the provided string."""
-
-    target = _resolve_user_path(path)
-    _ensure_parent(target)
-
-    encoded = content.encode(encoding or DEFAULT_FILE_ENCODING)
-    if len(encoded) > MAX_FILE_BYTES:
-        raise ValueError("Updated content exceeds MAX_FILE_BYTES limit")
-
-    target.write_text(content, encoding=encoding or DEFAULT_FILE_ENCODING)
-
     state = _current_state()
+    client = HTTPFileClient.from_env()
+    try:
+        data = await client.write(path, content, encoding)
+    except Exception as e:
+        raise ValueError(f"Unable to write '{path}': {e}") from None
     if state:
-        state.record(target, content, "edit")
+        state.record(WORKSPACE_ROOT / data["path"], data["content"], "edit")
     return f"Updated {path}"
+
+
+@agent.tool
+async def list_files(ctx: RunContext[None]) -> list[str]:
+    """List all files under the store root (files/...)."""
+    client = HTTPFileClient.from_env()
+    data = await client.list_files()
+    return data
 
 
 __all__ = [

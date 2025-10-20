@@ -1,9 +1,9 @@
-"""Sample module showcasing the agent-editable workspace."""
+"""Sample module showcasing the agent-editable workspace."
 
 from __future__ import annotations
 
-
-def greet(name: str) -> str:
+fdsaf
+def greet(name: str) -> str:dfsafdsa
     """Return a friendly greeting for *name*."""
 
     if not name:
@@ -12,4 +12,4 @@ def greet(name: str) -> str:
 
 
 if __name__ == "__main__":
-    print(greet("world"))
+    print(greet("universe"))
