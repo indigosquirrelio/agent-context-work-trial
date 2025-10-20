@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -57,9 +57,110 @@ const Composer = () => (
 
 const apiBase = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8000'
 const filesBase = `${apiBase}/files`
-const DEFAULT_FILE_PATH = 'files/example.py'
+const DEFAULT_FILE_PATH = 'files/pydantic-ai-main/pydantic_ai_slim/pydantic_ai/agent/abstract.py'
 const EDITOR_LANGUAGE = 'python'
 const POLL_MS = 5000
+
+interface FileTreeNode {
+  name: string
+  path: string
+  isFile: boolean
+  children: FileTreeNode[]
+}
+
+function buildFileTree(files: string[]): FileTreeNode[] {
+  const root: FileTreeNode[] = []
+
+  files.forEach(filePath => {
+    const parts = filePath.split('/')
+    let currentLevel = root
+    let currentPath = ''
+
+    parts.forEach((part, index) => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part
+      const isFile = index === parts.length - 1
+
+      let existingNode = currentLevel.find(node => node.name === part)
+
+      if (!existingNode) {
+        existingNode = {
+          name: part,
+          path: currentPath,
+          isFile,
+          children: []
+        }
+        currentLevel.push(existingNode)
+      }
+
+      currentLevel = existingNode.children
+    })
+  })
+
+  return root
+}
+
+const FileTreeItem = ({
+  node,
+  currentFile,
+  onFileClick,
+  depth = 0
+}: {
+  node: FileTreeNode
+  currentFile: string
+  onFileClick: (path: string) => void
+  depth?: number
+}) => {
+  // Check if this folder contains the current file
+  const containsCurrentFile = React.useMemo(() => {
+    if (node.isFile) return false
+    return currentFile.startsWith(node.path + '/')
+  }, [node, currentFile])
+
+  const [isOpen, setIsOpen] = React.useState(containsCurrentFile)
+
+  // Auto-expand when currentFile changes and this folder contains it
+  React.useEffect(() => {
+    if (containsCurrentFile) {
+      setIsOpen(true)
+    }
+  }, [containsCurrentFile])
+
+  if (node.isFile) {
+    return (
+      <button
+        className={`file-tree-item ${node.path === currentFile ? 'file-tree-item--active' : ''}`}
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        onClick={() => onFileClick(node.path)}
+        title={node.path}
+      >
+        <span className="file-icon">📄</span>
+        <span className="file-tree-name">{node.name}</span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="file-tree-folder">
+      <button
+        className="file-tree-item file-tree-folder-name"
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span className="folder-icon">{isOpen ? '📂' : '📁'}</span>
+        <span className="file-tree-name">{node.name}</span>
+      </button>
+      {isOpen && node.children.map(child => (
+        <FileTreeItem
+          key={child.path}
+          node={child}
+          currentFile={currentFile}
+          onFileClick={onFileClick}
+          depth={depth + 1}
+        />
+      ))}
+    </div>
+  )
+}
 
 async function readFromStore(path: string): Promise<FileReadResponse> {
   const resp = await fetch(`${filesBase}/read`, {
@@ -81,86 +182,38 @@ async function writeToStore(path: string, content: string): Promise<FileReadResp
   return resp.json()
 }
 
+async function listFiles(): Promise<string[]> {
+  const resp = await fetch(`${filesBase}/list`)
+  if (!resp.ok) throw new Error(await resp.text())
+  const data = await resp.json()
+  return data.files || []
+}
+
 function App() {
   const [conversationId] = useState(() => crypto.randomUUID())
-  const [editorPath, setEditorPath] = useState<string>(DEFAULT_FILE_PATH)
-  const [editorContent, setEditorContent] = useState<string>('# Loading example.py...\n')
-  const [remoteEtag, setRemoteEtag] = useState<string>('')
+  const [files, setFiles] = useState<string[]>([])
+  const [currentFile, setCurrentFile] = useState<string>(DEFAULT_FILE_PATH)
+  const [fileContents, setFileContents] = useState<Record<string, string>>({})
+  const [remoteEtags, setRemoteEtags] = useState<Record<string, string>>({})
   const [dirty, setDirty] = useState<boolean>(false)
   const [saving, setSaving] = useState<boolean>(false)
   const [error, setError] = useState<string>('')
 
-  // Keep a ref to avoid racey setStates inside poll
-  const contentRef = useRef(editorContent)
-  useEffect(() => { contentRef.current = editorContent }, [editorContent])
+  const editorRef = useRef<any>(null)
   const dirtyRef = useRef(dirty)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
-  // Bootstrap initial file through the HTTP file store
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        const data = await readFromStore(DEFAULT_FILE_PATH)
-        if (!cancelled) {
-          setEditorPath(data.path)
-          setEditorContent(data.content)
-          setRemoteEtag(data.etag)
-          setDirty(false)
-          setError('')
-        }
-      } catch (e) {
-        // Fallback to legacy /api/file loader (startup robustness)
-        try {
-          const legacy = await fetch(`${apiBase}/api/file?path=${encodeURIComponent(DEFAULT_FILE_PATH)}`)
-          if (legacy.ok) {
-            const data = (await legacy.json()) as FileResponse
-            if (!cancelled) {
-              setEditorPath(data.path)
-              setEditorContent(data.content)
-              setDirty(false)
-              setError('')
-            }
-          } else {
-            setError('Failed to load initial file.')
-          }
-        } catch {
-          setError('Failed to load initial file.')
-        }
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [])
+  const onSaveRef = useRef<() => void>()
+  const onReloadRef = useRef<() => void>()
 
-  // Lightweight polling: fetch latest content, if it changed and we are NOT dirty, update
-  useEffect(() => {
-    const id = setInterval(async () => {
-      try {
-        const data = await readFromStore(editorPath)
-        if (data.etag !== remoteEtag && !dirtyRef.current) {
-          setEditorContent(data.content)
-          setRemoteEtag(data.etag)
-        }
-      } catch {
-        /* ignore */
-      }
-    }, POLL_MS)
-    return () => clearInterval(id)
-  }, [editorPath, remoteEtag])
-
-  const onChange: OnChange = (value) => {
-    setEditorContent(value ?? '')
-    setDirty(true)
-  }
-
+  // Define save handler
   const onSave = async () => {
     setSaving(true)
     setError('')
     try {
-      const data = await writeToStore(editorPath, contentRef.current)
-      // Overwrite on server → server is source of truth; update etag
-      setRemoteEtag(data.etag)
+      const content = editorRef.current?.getValue() ?? fileContents[currentFile] ?? ''
+      const data = await writeToStore(currentFile, content)
+      setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
       setDirty(false)
     } catch (e: any) {
       setError(e?.message ?? 'Save failed.')
@@ -169,16 +222,144 @@ function App() {
     }
   }
 
-  const onReload = async () => {
+  // Define reload handler (declared early for ref)
+  const onReloadHandler = async () => {
     try {
-      const data = await readFromStore(editorPath)
-      setEditorContent(data.content)
-      setRemoteEtag(data.etag)
+      const data = await readFromStore(currentFile)
+      setFileContents(prev => ({ ...prev, [data.path]: data.content }))
+      setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
       setDirty(false)
       setError('')
     } catch (e: any) {
       setError(e?.message ?? 'Reload failed.')
     }
+  }
+
+  // Keep refs updated
+  useEffect(() => {
+    onSaveRef.current = onSave
+    onReloadRef.current = onReloadHandler
+  })
+
+  // Keyboard shortcuts: Cmd+S to save, Cmd+R to reload
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+S / Ctrl+S to save
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        if (dirtyRef.current && onSaveRef.current) {
+          onSaveRef.current()
+        }
+      }
+      // Cmd+R / Ctrl+R to reload
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault()
+        if (onReloadRef.current) {
+          onReloadRef.current()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Load file list on mount
+  useEffect(() => {
+    let cancelled = false
+    const loadFiles = async () => {
+      try {
+        const fileList = await listFiles()
+        if (!cancelled) {
+          setFiles(fileList)
+        }
+      } catch (e) {
+        console.error('Failed to load file list:', e)
+      }
+    }
+    loadFiles()
+    return () => { cancelled = true }
+  }, [])
+
+  // Load initial file content
+  useEffect(() => {
+    let cancelled = false
+    const loadFile = async () => {
+      try {
+        const data = await readFromStore(DEFAULT_FILE_PATH)
+        if (!cancelled) {
+          setFileContents(prev => ({ ...prev, [data.path]: data.content }))
+          setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
+          setCurrentFile(data.path)
+          setError('')
+        }
+      } catch (e) {
+        setError('Failed to load initial file.')
+      }
+    }
+    loadFile()
+    return () => { cancelled = true }
+  }, [])
+
+  // Lightweight polling: fetch latest content, if it changed and we are NOT dirty, update
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const data = await readFromStore(currentFile)
+        const currentEtag = remoteEtags[currentFile]
+        if (data.etag !== currentEtag && !dirtyRef.current) {
+          setFileContents(prev => ({ ...prev, [data.path]: data.content }))
+          setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
+        }
+      } catch {
+        /* ignore */
+      }
+    }, POLL_MS)
+    return () => clearInterval(id)
+  }, [currentFile, remoteEtags])
+
+  const onChange: OnChange = (value) => {
+    if (value !== undefined) {
+      setFileContents(prev => ({ ...prev, [currentFile]: value }))
+      setDirty(true)
+    }
+  }
+
+  const switchFile = async (filePath: string) => {
+    if (filePath === currentFile) return
+
+    // Load file content if not already loaded
+    if (!fileContents[filePath]) {
+      try {
+        const data = await readFromStore(filePath)
+        setFileContents(prev => ({ ...prev, [data.path]: data.content }))
+        setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
+      } catch (e: any) {
+        setError(e?.message ?? 'Failed to load file.')
+        return
+      }
+    }
+
+    setCurrentFile(filePath)
+    setDirty(false)
+    setError('')
+  }
+
+  const getLanguageFromPath = (path: string): string => {
+    const ext = path.split('.').pop()?.toLowerCase()
+    const langMap: Record<string, string> = {
+      'py': 'python',
+      'js': 'javascript',
+      'ts': 'typescript',
+      'jsx': 'javascript',
+      'tsx': 'typescript',
+      'json': 'json',
+      'html': 'html',
+      'css': 'css',
+      'md': 'markdown',
+      'txt': 'plaintext',
+    }
+    return langMap[ext || ''] || 'plaintext'
   }
 
   // Hook the chat adapter (unchanged except for var deref)
@@ -211,13 +392,16 @@ function App() {
           const data = (await response.json()) as ChatResponse
           if (abortSignal.aborted) throw new DOMException('Run aborted', 'AbortError')
 
-          if (data.editor_content) setEditorContent(data.editor_content)
-          if (data.editor_path) setEditorPath(data.editor_path)
+          if (data.editor_content && data.editor_path) {
+            setFileContents(prev => ({ ...prev, [data.editor_path!]: data.editor_content! }))
+            setCurrentFile(data.editor_path)
+          }
 
           // After agent write, refresh ETag if we can
           try {
-            const read = await readFromStore(data.editor_path ?? editorPath)
-            setRemoteEtag(read.etag)
+            const path = data.editor_path ?? currentFile
+            const read = await readFromStore(path)
+            setRemoteEtags(prev => ({ ...prev, [read.path]: read.etag }))
             setDirty(false)
           } catch { /* ignore */ }
 
@@ -239,21 +423,37 @@ function App() {
       },
     }
     return adapter
-  }, [conversationId, editorPath])
+  }, [conversationId, currentFile])
 
   const runtime = useLocalRuntime(chatAdapter, useMemo(() => ({ initialMessages: [] as const }), []))
+
+  const fileTree = useMemo(() => buildFileTree(files), [files])
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="layout">
+        <aside className="file-list-pane">
+          <div className="file-list-header">Explorer</div>
+          <div className="file-tree">
+            {fileTree.map((node) => (
+              <FileTreeItem
+                key={node.path}
+                node={node}
+                currentFile={currentFile}
+                onFileClick={switchFile}
+              />
+            ))}
+          </div>
+        </aside>
+
         <section className="editor-pane">
           <div className="file-toolbar">
             <div className="file-toolbar__left">
-              <span className="file-path" title={editorPath}>{editorPath}</span>
+              <span className="file-path" title={currentFile}>{currentFile}</span>
               {dirty && <span className="badge badge--dirty">unsaved</span>}
             </div>
             <div className="file-toolbar__right">
-              <button className="btn" onClick={onReload} title="Reload from server">Reload</button>
+              <button className="btn" onClick={onReloadHandler} title="Reload from server">Reload</button>
               <button className="btn btn--primary" onClick={onSave} disabled={!dirty || saving}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
@@ -263,11 +463,12 @@ function App() {
           <div className="editor-content">
             <Editor
               height="100%"
-              defaultLanguage={EDITOR_LANGUAGE}
-              language={EDITOR_LANGUAGE}
-              value={editorContent}
+              path={currentFile}
+              defaultLanguage={getLanguageFromPath(currentFile)}
+              value={fileContents[currentFile] || ''}
               theme="vs-dark"
               onChange={onChange}
+              onMount={(editor) => { editorRef.current = editor }}
               options={{
                 readOnly: false,
                 minimap: { enabled: false },
