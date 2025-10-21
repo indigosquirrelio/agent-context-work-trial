@@ -1,6 +1,3 @@
-print("Hello, world!")
-print("bye " * 100)
-print("no")
-for i in range(100):
-    print("hi")
-    
+print("Hello, World!")
+print("Still Here")
+print("Goodbye, World!")

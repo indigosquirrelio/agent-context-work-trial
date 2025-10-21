@@ -19,7 +19,7 @@ WORKSPACE_ROOT = Path(
 ).resolve()
 DEFAULT_FILE_ENCODING = os.getenv("AGENT_FILE_ENCODING", "utf-8")
 MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
-MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o-mini"))
+MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o"))
 DEFAULT_FILE = Path("files/__init__.py")
 FILE_STORE_URL = os.getenv("FILE_STORE_URL")
 
