@@ -168,18 +168,26 @@ File Operations:
 2. Editing existing files: Use edit_file with search/replace blocks
 3. Creating new files: Use edit_file with complete content
 
-Editing Existing Files:
+Editing Existing Files - CRITICAL RULES:
 - ALWAYS read the file first with read_file to see current contents
-- Use edit_instructions with search/replace blocks in this format:
+- NEVER use the 'content' parameter for existing files - this replaces the entire file
+- ALWAYS use edit_instructions with search/replace blocks for existing files
+- The user may be concurrently editing the file, so you must preserve their changes
+- Only modify the specific parts that need to be changed
+
+Search/replace block format:
   <<<<<<< SEARCH
   exact code to find
   =======
   new code to replace it with
   >>>>>>> REPLACE
+
+Search/Replace Requirements:
 - The SEARCH block must match EXACTLY (including whitespace/indentation)
 - Each SEARCH must be unique in the file
 - You can provide multiple search/replace blocks in the edit_instructions list
 - Always provide a clear description of what changes you're making
+- Be as specific as possible - target only the lines that need to change
 
 Creating New Files:
 - Use the content parameter with complete file contents
@@ -194,7 +202,9 @@ File Paths:
 Best Practices:
 - Never guess file contents - always read first
 - Make surgical edits with search/replace blocks rather than replacing entire files
+- Preserve concurrent user edits by only changing specific parts
 - Provide clear descriptions for all edits
+- If you need to make multiple changes, use multiple search/replace blocks
 """
 
 
@@ -223,6 +233,7 @@ async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = 
     """
     state = _current_state()
     client = HTTPFileClient.from_env()
+    print(f"[read_file] reading file {path}")
     try:
         data = await client.read(path, encoding)
     except Exception as e:
@@ -249,11 +260,12 @@ async def edit_file(
     - Leave edit_instructions as None
     - Provide a description of what the file does
 
-    For EDITING existing files:
+    For EDITING existing files (RECOMMENDED for concurrent editing):
     - Set filepath to the file to edit
     - Set edit_instructions to a list of search/replace blocks
     - Leave content as None
     - Provide a description of the changes
+    - This preserves concurrent user edits by only changing specific parts
 
     Search/replace block format:
     ```
@@ -271,6 +283,9 @@ async def edit_file(
         content: Complete file content for NEW file creation (optional)
         encoding: Text encoding (default: utf-8)
 
+    IMPORTANT: For existing files, always use edit_instructions instead of content
+    to preserve any concurrent edits the user may be making.
+
     Returns:
         Success message describing what was done
     """
@@ -285,6 +300,20 @@ async def edit_file(
     if content is None and edit_instructions is None:
         raise ValueError(
             "Must specify either 'content' (for new files) or 'edit_instructions' (for edits)."
+        )
+    
+    # Check if file exists to prevent accidental full file replacement
+    try:
+        await client.read(filepath, encoding)
+        file_exists = True
+    except Exception:
+        file_exists = False
+    
+    if file_exists and content is not None:
+        raise ValueError(
+            f"File '{filepath}' already exists. Use 'edit_instructions' with search/replace blocks "
+            f"to make surgical edits instead of replacing the entire file. This preserves any "
+            f"concurrent edits the user may be making."
         )
 
     final_content: str

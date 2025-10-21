@@ -575,14 +575,16 @@ function App() {
           if (data.editor_content && data.editor_path) {
             setFileContents(prev => ({ ...prev, [data.editor_path!]: data.editor_content! }))
             setCurrentFile(data.editor_path)
+            setDirty(false) // Mark as clean since this is the latest content from agent
+          } else {
+            // Only re-read from store if agent didn't provide updated content
+            try {
+              const path = data.editor_path ?? currentFile
+              const read = await readFromStore(path)
+              setRemoteEtags(prev => ({ ...prev, [read.path]: read.etag }))
+              setDirty(false)
+            } catch { /* ignore */ }
           }
-
-          try {
-            const path = data.editor_path ?? currentFile
-            const read = await readFromStore(path)
-            setRemoteEtags(prev => ({ ...prev, [read.path]: read.etag }))
-            setDirty(false)
-          } catch { /* ignore */ }
 
           return {
             content: data.reply ? [{ type: 'text' as const, text: data.reply }] : [],
