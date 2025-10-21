@@ -289,6 +289,10 @@ async def edit_file(
     Returns:
         Success message describing what was done
     """
+
+    print(f"[edit_file] editing file {filepath}")
+    print(f"edit_instructions: {edit_instructions}")
+    print(f"content: {content}")
     state = _current_state()
     client = HTTPFileClient.from_env()
 
