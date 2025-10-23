@@ -11,6 +11,7 @@ from typing import List, Optional
 from pydantic_ai import Agent, RunContext
 
 from .file_client import HTTPFileClient
+from .edit_versioning import EditVersionManager, EditSource, EditType, ConflictResolutionStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,16 @@ MAX_FILE_BYTES = int(os.getenv("AGENT_MAX_FILE_BYTES", "200000"))
 MODEL_NAME = os.getenv("AGENT_MODEL", os.getenv("MODEL_NAME", "openai:gpt-4o"))
 DEFAULT_FILE = Path("files/__init__.py")
 FILE_STORE_URL = os.getenv("FILE_STORE_URL")
+
+# Global edit version manager
+_edit_version_manager: Optional[EditVersionManager] = None
+
+def get_edit_version_manager() -> EditVersionManager:
+    """Get or create the global edit version manager."""
+    global _edit_version_manager
+    if _edit_version_manager is None:
+        _edit_version_manager = EditVersionManager(WORKSPACE_ROOT)
+    return _edit_version_manager
 
 
 @dataclass
@@ -110,14 +121,25 @@ def _parse_search_replace_block(block: str) -> tuple[str, str]:
         tuple of (search_text, replace_text)
     """
     block = block.replace("\r\n", "\n")
-    pattern = r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE\r?\n?"
+    
+    # More flexible pattern that handles various line endings and whitespace
+    pattern = r"<<<<<<<\s+SEARCH\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>>\s+REPLACE\s*\n?"
     match = re.search(pattern, block, re.DOTALL)
     if not match:
-        raise ValueError(
-            "No match found or invalid search/replace block format. Expected:\n"
-            "<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE"
-        )
-    return match.group(1), match.group(2)
+        # Try alternative pattern without strict line ending requirements
+        pattern = r"<<<<<<<\s+SEARCH\s*(.*?)\s*=======\s*(.*?)\s*>>>>>>>\s+REPLACE"
+        match = re.search(pattern, block, re.DOTALL)
+        if not match:
+            raise ValueError(
+                f"No match found or invalid search/replace block format. Expected:\n"
+                f"<<<<<<< SEARCH\n...\n=======\n...\n>>>>>>> REPLACE\n\n"
+                f"Received block:\n{repr(block)}"
+            )
+    
+    search_text = match.group(1).strip()
+    replace_text = match.group(2).strip()
+    
+    return search_text, replace_text
 
 
 def _apply_search_replace(content: str, search: str, replace: str) -> str:
@@ -128,9 +150,27 @@ def _apply_search_replace(content: str, search: str, replace: str) -> str:
     """
     count = content.count(search)
     if count == 0:
-        raise ValueError(f"Search text not found in file:\n{search}")
+        # Provide more helpful error message with context
+        lines = content.split('\n')
+        search_lines = search.split('\n')
+        if len(search_lines) == 1:
+            # Single line search - show surrounding context
+            for i, line in enumerate(lines):
+                if search in line:
+                    context_start = max(0, i - 2)
+                    context_end = min(len(lines), i + 3)
+                    context = '\n'.join(lines[context_start:context_end])
+                    raise ValueError(
+                        f"Search text not found in file. Looking for:\n{repr(search)}\n\n"
+                        f"File content around line {i+1}:\n{context}"
+                    )
+        
+        raise ValueError(
+            f"Search text not found in file:\n{repr(search)}\n\n"
+            f"File content:\n{repr(content)}"
+        )
     if count > 1:
-        raise ValueError(f"Search text found {count} times (must be unique):\n{search}")
+        raise ValueError(f"Search text found {count} times (must be unique):\n{repr(search)}")
     return content.replace(search, replace, 1)
 
 
@@ -233,11 +273,13 @@ async def read_file(ctx: RunContext[None], path: str, encoding: Optional[str] = 
     """
     state = _current_state()
     client = HTTPFileClient.from_env()
+    
     print(f"[read_file] reading file {path}")
     try:
         data = await client.read(path, encoding)
     except Exception as e:
         raise ValueError(f"File '{path}' does not exist or cannot be read: {e}") from None
+    
     if state:
         state.record(WORKSPACE_ROOT / data["path"], data["content"], "read")
     return data["content"]
@@ -295,12 +337,41 @@ async def edit_file(
     print(f"content: {content}")
     state = _current_state()
     client = HTTPFileClient.from_env()
+    version_manager = get_edit_version_manager()
 
-    if content is not None and edit_instructions is not None:
-        raise ValueError(
-            "Cannot specify both 'content' and 'edit_instructions'. "
-            "Use 'content' for new files, 'edit_instructions' for editing existing files."
+    # CRITICAL: Save current file state before making any agent changes
+    # This preserves the user's work even if agent edits fail
+    try:
+        print(f"[edit_file] Saving current file state before agent changes...")
+        
+        # Read current file content
+        current_file_data = await client.read(filepath, encoding)
+        current_file_content = current_file_data["content"]
+        
+        # Create a backup version record
+        backup_version = await version_manager.create_edit_version(
+            file_path=filepath,
+            content=current_file_content,
+            source=EditSource.USER,
+            owner="pre_agent_backup",
+            edit_operation_ids=[]
         )
+        
+        print(f"[edit_file] Created backup version {backup_version.version_id} before agent changes")
+        
+        # AUTOMATICALLY SAVE the file before agent changes
+        print(f"[edit_file] Automatically saving file before agent changes...")
+        await client.write(filepath, current_file_content, encoding)
+        print(f"[edit_file] File automatically saved before agent changes")
+        
+    except Exception as e:
+        print(f"[edit_file] Warning: Failed to create backup or save file before agent changes: {e}")
+        # Continue with agent edit even if backup/save fails
+
+    # Handle the case where both parameters might be provided due to concurrent edits
+    if content is not None and edit_instructions is not None:
+        print(f"[edit_file] Warning: Both content and edit_instructions provided. Using edit_instructions for existing file.")
+        content = None  # Prefer edit_instructions for existing files
     if content is None and edit_instructions is None:
         raise ValueError(
             "Must specify either 'content' (for new files) or 'edit_instructions' (for edits)."
@@ -321,31 +392,162 @@ async def edit_file(
         )
 
     final_content: str
+    edit_operation_ids = []
 
     if content is not None:
         final_content = content
         action = "create"
+        
+        # Record the edit operation
+        operation = await version_manager.record_edit_operation(
+            file_path=filepath,
+            source=EditSource.AGENT,
+            edit_type=EditType.FULL_CONTENT,
+            owner="agent",
+            description=description,
+            content=content
+        )
+        edit_operation_ids.append(operation.id)
     else:
+        # Check for user edits BEFORE reading from file system
+        print(f"[edit_file] Checking for user edits before applying agent changes to {filepath}")
+        
+        # Get the latest user version (if any)
+        user_version = await version_manager.get_latest_version(filepath, EditSource.USER)
+    
+        # Check for unsaved user edits (from frontend)
+        unsaved_user_operations = [
+            op for op in version_manager._edit_operations.values()
+            if op.file_path == filepath and op.metadata.get("unsaved", False)
+        ]
+        
+        # Determine the user's current content (from unsaved edits or saved version)
+        user_content = None
+        if unsaved_user_operations:
+            # Use the most recent unsaved edit from frontend
+            latest_unsaved = max(unsaved_user_operations, key=lambda op: op.timestamp)
+            user_content = latest_unsaved.content
+            print(f"[edit_file] Found unsaved user edits from frontend: {latest_unsaved.id}")
+            print(f"[edit_file] User frontend content: {repr(user_content[:100])}...")
+        elif user_version:
+            user_content = user_version.content
+            print(f"[edit_file] Found saved user version: {user_version.version_id}")
+            print(f"[edit_file] User content: {repr(user_content[:100])}...")
+        
+        # Read file system content only if no user content is available
         try:
             data = await client.read(filepath, encoding)
             current_content = data["content"]
+            print(f"[edit_file] File system content: {repr(current_content[:100])}...")
         except Exception as e:
             raise ValueError(
                 f"Cannot edit '{filepath}': file does not exist or cannot be read. "
                 f"To create a new file, use 'content' instead of 'edit_instructions'. Error: {e}"
             ) from None
 
+        # Decide which content to use as the base for agent edits
+        # PRIORITY: Frontend unsaved edits > Saved user version > File system content
+        base_content = current_content
+        if user_content:
+            if unsaved_user_operations:
+                print(f"[edit_file] Using frontend unsaved edits as base for agent edits")
+                base_content = user_content
+            elif user_content != current_content:
+                print(f"[edit_file] User has saved changes that differ from file content")
+                print(f"[edit_file] Using user content as base for agent edits")
+                base_content = user_content
+            else:
+                print(f"[edit_file] User content matches file content, using file content as base")
+                base_content = current_content
+        else:
+            print(f"[edit_file] No user content found, using current file content as base for agent edits")
+        
+        print(f"[edit_file] Final base content length: {len(base_content)} characters")
+        
         try:
-            final_content = _apply_edit_instructions(current_content, edit_instructions)  # type: ignore
+            print(f"[edit_file] Applying {len(edit_instructions)} edit instructions to {filepath}")
+            for i, instruction in enumerate(edit_instructions):
+                print(f"[edit_file] Edit instruction {i+1}: {repr(instruction[:100])}...")
+            
+            # Apply agent edits to the appropriate base content
+            final_content = _apply_edit_instructions(base_content, edit_instructions)  # type: ignore
+            print(f"[edit_file] Successfully applied edits to {filepath}")
         except ValueError as e:
+            print(f"[edit_file] Error applying edits to {filepath}: {e}")
             raise ValueError(f"Failed to apply edits to '{filepath}': {e}") from None
 
         action = "edit"
+        
+        # Record each edit instruction as a separate operation
+        for i, instruction in enumerate(edit_instructions):
+            try:
+                print(f"[edit_file] Parsing edit instruction {i+1} for versioning")
+                search, replace = _parse_search_replace_block(instruction)
+                print(f"[edit_file] Parsed search/replace: {repr(search[:50])}... -> {repr(replace[:50])}...")
+                
+                operation = await version_manager.record_edit_operation(
+                    file_path=filepath,
+                    source=EditSource.AGENT,
+                    edit_type=EditType.SEARCH_REPLACE,
+                    owner="agent",
+                    description=f"{description} (edit {i+1}/{len(edit_instructions)})",
+                    search_text=search,
+                    replace_text=replace
+                )
+                edit_operation_ids.append(operation.id)
+                print(f"[edit_file] Recorded edit operation {operation.id}")
+            except Exception as e:
+                print(f"[edit_file] Failed to record edit operation {i}: {e}")
+                logger.warning(f"Failed to record edit operation {i}: {e}")
+
+        # Clear unsaved edits since we're incorporating them
+        if unsaved_user_operations:
+            try:
+                print(f"[edit_file] Clearing {len(unsaved_user_operations)} unsaved user operations")
+                for op in unsaved_user_operations:
+                    if op.id in version_manager._edit_operations:
+                        del version_manager._edit_operations[op.id]
+                await version_manager._save_edit_operations()
+                print(f"[edit_file] Cleared unsaved user operations")
+            except Exception as e:
+                print(f"[edit_file] Failed to clear unsaved operations: {e}")
+    
+    print(f"[edit_file] Agent edit ready for {filepath}, proceeding with write")
 
     try:
         data = await client.write(filepath, final_content, encoding)
+        print(f"[edit_file] Successfully wrote agent changes to {filepath}")
     except Exception as e:
+        print(f"[edit_file] Failed to write agent changes to {filepath}: {e}")
+        
+        # Attempt to restore from backup if write failed
+        try:
+            print(f"[edit_file] Attempting to restore from backup version...")
+            if 'backup_version' in locals():
+                await client.write(filepath, backup_version.content, encoding)
+                print(f"[edit_file] Successfully restored from backup version {backup_version.version_id}")
+            else:
+                print(f"[edit_file] No backup version available for restore")
+        except Exception as restore_error:
+            print(f"[edit_file] Failed to restore from backup: {restore_error}")
+        
         raise ValueError(f"Unable to write '{filepath}': {e}") from None
+
+    # Create version record with the actual modified content
+    try:
+        print(f"[edit_file] Creating version record for {filepath} with {len(edit_operation_ids)} operations")
+        print(f"[edit_file] Version content: {repr(final_content[:100])}...")
+        version = await version_manager.create_edit_version(
+            file_path=filepath,
+            content=final_content,
+            source=EditSource.AGENT,
+            owner="agent",
+            edit_operation_ids=edit_operation_ids
+        )
+        print(f"[edit_file] Created version {version.version_id} for {filepath}")
+    except Exception as e:
+        print(f"[edit_file] Failed to create version record for {filepath}: {e}")
+        logger.warning(f"Failed to create version record for {filepath}: {e}")
 
     if state:
         state.record(WORKSPACE_ROOT / data["path"], data["content"], action)

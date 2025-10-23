@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Version Management Demo - Agent Context Work Trial</title>
+    <link rel="stylesheet" href="src/versionManager.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .demo-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .demo-header {
+            background-color: #2196f3;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .demo-header h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+        
+        .demo-header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+        }
+        
+        .demo-content {
+            padding: 20px;
+        }
+        
+        .demo-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background-color: #fafafa;
+        }
+        
+        .demo-section h2 {
+            margin: 0 0 15px 0;
+            color: #333;
+            border-bottom: 2px solid #2196f3;
+            padding-bottom: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .form-group textarea {
+            height: 100px;
+            resize: vertical;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        .info-box {
+            background-color: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .info-box h4 {
+            margin: 0 0 10px 0;
+            color: #1976d2;
+        }
+        
+        .info-box p {
+            margin: 0;
+            color: #333;
+        }
+        
+        .status-display {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <div class="demo-header">
+            <h1>Version Management & Conflict Resolution</h1>
+            <p>Demonstration of saving both user and agent versions of file edits with intelligent aggregation</p>
+        </div>
+        
+        <div class="demo-content">
+            <div class="info-box">
+                <h4>How it works:</h4>
+                <p>
+                    This system automatically saves both user and agent versions of file edits. When conflicts arise 
+                    between user and agent changes, the system can intelligently aggregate them or prompt for manual 
+                    resolution. The version management system tracks all edit operations and provides conflict resolution tools.
+                </p>
+            </div>
+            
+            <!-- File Editor Section -->
+            <div class="demo-section">
+                <h2>File Editor</h2>
+                <div class="form-group">
+                    <label for="filePath">File Path:</label>
+                    <input type="text" id="filePath" value="files/example.py" placeholder="Enter file path">
+                </div>
+                <div class="form-group">
+                    <label for="fileContent">File Content:</label>
+                    <textarea id="fileContent" placeholder="Enter file content here...">def hello_world():
+    print("Hello, World!")
+    return "success"
+
+if __name__ == "__main__":
+    result = hello_world()
+    print(f"Result: {result}")</textarea>
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="saveUserEdit()">Save as User Edit</button>
+                    <button class="btn btn-warning" onclick="simulateAgentEdit()">Simulate Agent Edit</button>
+                    <button class="btn btn-success" onclick="loadLatestVersion()">Load Latest Version</button>
+                    <button class="btn btn-secondary" onclick="aggregateEdits()">Aggregate Edits</button>
+                </div>
+                <div id="editorStatus" class="status-display"></div>
+            </div>
+            
+            <!-- Version History Section -->
+            <div class="demo-section">
+                <h2>Version History</h2>
+                <div class="form-group">
+                    <label for="historyFilePath">File Path:</label>
+                    <input type="text" id="historyFilePath" value="files/example.py" placeholder="Enter file path">
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="loadVersionHistory()">Load Version History</button>
+                    <button class="btn btn-secondary" onclick="clearHistory()">Clear History</button>
+                </div>
+                <div id="versionHistory" class="status-display"></div>
+            </div>
+            
+            <!-- Conflict Resolution Section -->
+            <div class="demo-section">
+                <h2>Conflict Resolution</h2>
+                <div class="form-group">
+                    <label for="conflictFilePath">File Path:</label>
+                    <input type="text" id="conflictFilePath" value="files/example.py" placeholder="Enter file path">
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="checkConflicts()">Check for Conflicts</button>
+                    <button class="btn btn-warning" onclick="getAllConflicts()">Get All Conflicts</button>
+                </div>
+                <div id="conflictResolution"></div>
+            </div>
+            
+            <!-- System Status Section -->
+            <div class="demo-section">
+                <h2>System Status</h2>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="checkSystemStatus()">Check System Status</button>
+                    <button class="btn btn-secondary" onclick="cleanupVersions()">Cleanup Old Versions</button>
+                </div>
+                <div id="systemStatus" class="status-display"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Include the version management scripts -->
+    <script src="src/versionManager.js"></script>
+    
+    <script>
+        // Initialize version manager
+        const versionManager = new VersionManager();
+        const conflictUI = new ConflictResolutionUI(versionManager, 'conflictResolution');
+        
+        // Demo functions
+        async function saveUserEdit() {
+            const filePath = document.getElementById('filePath').value;
+            const content = document.getElementById('fileContent').value;
+            
+            try {
+                updateStatus('editorStatus', 'Saving user edit...');
+                const result = await versionManager.recordUserEdit(filePath, content, 'demo-user', 'Demo user edit');
+                updateStatus('editorStatus', `User edit saved successfully!\nVersion ID: ${result.version_id}\nTimestamp: ${result.timestamp}`);
+            } catch (error) {
+                updateStatus('editorStatus', `Error saving user edit: ${error.message}`);
+            }
+        }
+        
+        async function simulateAgentEdit() {
+            const filePath = document.getElementById('filePath').value;
+            const currentContent = document.getElementById('fileContent').value;
+            
+            // Simulate agent making changes
+            const agentContent = currentContent.replace('Hello, World!', 'Hello from Agent!')
+                                              .replace('return "success"', 'return "agent_modified"');
+            
+            try {
+                updateStatus('editorStatus', 'Simulating agent edit...');
+                
+                // Record agent edit operation
+                const response = await fetch(`${versionManager.apiBase}/operations`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: filePath,
+                        source: 'agent',
+                        edit_type: 'search_replace',
+                        description: 'Agent modified greeting and return value',
+                        owner: 'demo-agent',
+                        search_text: 'Hello, World!',
+                        replace_text: 'Hello from Agent!'
+                    })
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                
+                const operation = await response.json();
+                
+                // Create agent version
+                const version = await versionManager.create_edit_version(
+                    filePath, 
+                    agentContent, 
+                    'agent', 
+                    'demo-agent', 
+                    null, 
+                    [operation.operation_id]
+                );
+                
+                updateStatus('editorStatus', `Agent edit simulated successfully!\nVersion ID: ${version.version_id}\nTimestamp: ${version.timestamp}`);
+            } catch (error) {
+                updateStatus('editorStatus', `Error simulating agent edit: ${error.message}`);
+            }
+        }
+        
+        async function loadLatestVersion() {
+            const filePath = document.getElementById('filePath').value;
+            
+            try {
+                updateStatus('editorStatus', 'Loading latest version...');
+                const version = await versionManager.getLatestVersion(filePath);
+                
+                if (version) {
+                    document.getElementById('fileContent').value = version.content;
+                    updateStatus('editorStatus', `Latest version loaded!\nSource: ${version.source}\nTimestamp: ${version.timestamp}`);
+                } else {
+                    updateStatus('editorStatus', 'No versions found for this file.');
+                }
+            } catch (error) {
+                updateStatus('editorStatus', `Error loading latest version: ${error.message}`);
+            }
+        }
+        
+        async function aggregateEdits() {
+            const filePath = document.getElementById('filePath').value;
+            
+            try {
+                updateStatus('editorStatus', 'Aggregating edits...');
+                const result = await versionManager.aggregateEdits(filePath, 'merge');
+                
+                document.getElementById('fileContent').value = result.aggregated_content;
+                
+                let statusMessage = `Edits aggregated successfully!\nStrategy: ${result.strategy_used}`;
+                if (result.conflicts_requiring_manual_resolution.length > 0) {
+                    statusMessage += `\n\nConflicts requiring manual resolution: ${result.conflicts_requiring_manual_resolution.length}`;
+                }
+                
+                updateStatus('editorStatus', statusMessage);
+            } catch (error) {
+                updateStatus('editorStatus', `Error aggregating edits: ${error.message}`);
+            }
+        }
+        
+        async function loadVersionHistory() {
+            const filePath = document.getElementById('historyFilePath').value;
+            
+            try {
+                updateStatus('versionHistory', 'Loading version history...');
+                const history = await versionManager.getFileHistory(filePath);
+                
+                let historyText = `Version History for ${filePath}:\n\n`;
+                history.versions.forEach((version, index) => {
+                    historyText += `${index + 1}. Version ${version.version_id}\n`;
+                    historyText += `   Source: ${version.source}\n`;
+                    historyText += `   Owner: ${version.owner}\n`;
+                    historyText += `   Timestamp: ${version.timestamp}\n`;
+                    historyText += `   ETag: ${version.etag.substring(0, 8)}...\n`;
+                    if (version.conflicts && version.conflicts.length > 0) {
+                        historyText += `   Conflicts: ${version.conflicts.join(', ')}\n`;
+                    }
+                    historyText += '\n';
+                });
+                
+                updateStatus('versionHistory', historyText);
+            } catch (error) {
+                updateStatus('versionHistory', `Error loading version history: ${error.message}`);
+            }
+        }
+        
+        async function checkConflicts() {
+            const filePath = document.getElementById('conflictFilePath').value;
+            
+            try {
+                await conflictUI.displayConflicts(filePath);
+            } catch (error) {
+                document.getElementById('conflictResolution').innerHTML = 
+                    `<p class="error">Error checking conflicts: ${error.message}</p>`;
+            }
+        }
+        
+        async function getAllConflicts() {
+            try {
+                const conflicts = await versionManager.getConflicts();
+                
+                let conflictsText = `All Conflicts:\n\n`;
+                if (conflicts.length === 0) {
+                    conflictsText += 'No conflicts found.';
+                } else {
+                    conflicts.forEach((conflict, index) => {
+                        conflictsText += `${index + 1}. Conflict ${conflict.conflict_id}\n`;
+                        conflictsText += `   File: ${conflict.file_path}\n`;
+                        conflictsText += `   Resolved: ${conflict.resolved}\n`;
+                        conflictsText += `   Strategy: ${conflict.resolution_strategy}\n`;
+                        conflictsText += `   Timestamp: ${conflict.timestamp}\n\n`;
+                    });
+                }
+                
+                updateStatus('conflictResolution', conflictsText);
+            } catch (error) {
+                updateStatus('conflictResolution', `Error getting conflicts: ${error.message}`);
+            }
+        }
+        
+        async function checkSystemStatus() {
+            try {
+                updateStatus('systemStatus', 'Checking system status...');
+                
+                // Test basic connectivity
+                const testPath = 'files/test.txt';
+                const testContent = 'System status test';
+                
+                // Record a test edit
+                await versionManager.recordUserEdit(testPath, testContent, 'system-test', 'System status test');
+                
+                // Get version history
+                const history = await versionManager.getFileHistory(testPath);
+                
+                // Get conflicts
+                const conflicts = await versionManager.getConflicts();
+                
+                const statusMessage = `System Status: OK\n\n` +
+                    `Test file versions: ${history.versions.length}\n` +
+                    `Total conflicts: ${conflicts.length}\n` +
+                    `Unresolved conflicts: ${conflicts.filter(c => !c.resolved).length}\n\n` +
+                    `Last test: ${new Date().toISOString()}`;
+                
+                updateStatus('systemStatus', statusMessage);
+            } catch (error) {
+                updateStatus('systemStatus', `System status check failed: ${error.message}`);
+            }
+        }
+        
+        async function cleanupVersions() {
+            try {
+                updateStatus('systemStatus', 'Cleaning up old versions...');
+                const result = await versionManager.cleanupOldVersions(10);
+                updateStatus('systemStatus', `Cleanup completed: ${result.message}`);
+            } catch (error) {
+                updateStatus('systemStatus', `Error during cleanup: ${error.message}`);
+            }
+        }
+        
+        function clearHistory() {
+            document.getElementById('versionHistory').textContent = '';
+        }
+        
+        function updateStatus(elementId, message) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.textContent = message;
+            }
+        }
+        
+        // Initialize demo
+        document.addEventListener('DOMContentLoaded', function() {
+            updateStatus('editorStatus', 'Version Management Demo Ready!\n\nTry editing the file content and saving as user edit, then simulate an agent edit to see conflict resolution in action.');
+        });
+    </script>
+</body>
+</html>

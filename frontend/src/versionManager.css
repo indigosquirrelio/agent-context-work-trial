@@ -1,0 +1,319 @@
+/**
+ * CSS styles for Version Management and Conflict Resolution UI
+ */
+
+.conflicts-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.conflicts-container h3 {
+    color: #333;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 10px;
+}
+
+.conflict-item {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    transition: box-shadow 0.2s ease;
+}
+
+.conflict-item:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.conflict-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.conflict-header h4 {
+    margin: 0;
+    color: #d32f2f;
+    font-size: 1.1em;
+}
+
+.conflict-timestamp {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.conflict-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.2s ease;
+}
+
+.btn-primary {
+    background-color: #2196f3;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #1976d2;
+}
+
+.btn-success {
+    background-color: #4caf50;
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #388e3c;
+}
+
+.btn-warning {
+    background-color: #ff9800;
+    color: white;
+}
+
+.btn-warning:hover {
+    background-color: #f57c00;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #545b62;
+}
+
+.conflict-details {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.conflict-details h4 {
+    color: #d32f2f;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 10px;
+}
+
+.version-comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.version-panel {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 15px;
+    background-color: #fff;
+}
+
+.version-panel h5 {
+    margin: 0 0 10px 0;
+    color: #333;
+    font-size: 1em;
+}
+
+.user-version {
+    border-left: 4px solid #4caf50;
+}
+
+.agent-version {
+    border-left: 4px solid #2196f3;
+}
+
+.version-content {
+    width: 100%;
+    height: 200px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    resize: vertical;
+    background-color: #f8f8f8;
+}
+
+.version-meta {
+    margin-top: 10px;
+    color: #666;
+}
+
+.resolution-panel {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    background-color: #fff;
+    border-left: 4px solid #ff9800;
+}
+
+.resolution-panel h5 {
+    margin: 0 0 15px 0;
+    color: #333;
+    font-size: 1.1em;
+}
+
+.resolution-content {
+    width: 100%;
+    height: 300px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    resize: vertical;
+    margin-bottom: 15px;
+}
+
+.resolution-notes {
+    width: 100%;
+    height: 80px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    font-size: 0.9em;
+    resize: vertical;
+    margin-bottom: 15px;
+}
+
+.resolution-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.error {
+    color: #d32f2f;
+    background-color: #ffebee;
+    border: 1px solid #ffcdd2;
+    border-radius: 4px;
+    padding: 10px;
+    margin: 10px 0;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .version-comparison {
+        grid-template-columns: 1fr;
+    }
+    
+    .conflict-actions {
+        flex-direction: column;
+    }
+    
+    .btn {
+        width: 100%;
+    }
+    
+    .resolution-actions {
+        flex-direction: column;
+    }
+}
+
+/* Animation for conflict items */
+.conflict-item {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Status indicators */
+.status-indicator {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-resolved {
+    background-color: #4caf50;
+}
+
+.status-unresolved {
+    background-color: #f44336;
+}
+
+.status-pending {
+    background-color: #ff9800;
+}
+
+/* Version history styles */
+.version-history {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.version-history h3 {
+    color: #333;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 10px;
+}
+
+.version-item {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    padding: 15px;
+    background-color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.version-item:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.version-info {
+    flex: 1;
+}
+
+.version-meta {
+    color: #666;
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
+.version-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.version-source-user {
+    border-left: 4px solid #4caf50;
+}
+
+.version-source-agent {
+    border-left: 4px solid #2196f3;
+}
+
+.version-source-system {
+    border-left: 4px solid #ff9800;
+}

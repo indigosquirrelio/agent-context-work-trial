@@ -1,3 +1,4 @@
 print("Hello, World!")
-print("Still Here")
-print("Goodbye, World!")
+print("Goodbye")
+print("Goodbye Universe")
+The quick brown fox jumped over the lazy dog.

@@ -22,6 +22,7 @@ from .agent import (
 )
 from .file_server import router as files_router
 from .file_client import HTTPFileClient
+from .version_api import router as version_router
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ app.add_middleware(
 )
 
 app.include_router(files_router, prefix="/files")
+app.include_router(version_router)
 
 
 async def _load_default_file() -> tuple[str, str]:

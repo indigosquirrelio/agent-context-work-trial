@@ -349,10 +349,12 @@ function App() {
   const [saving, setSaving] = useState<boolean>(false)
   const [error, setError] = useState<string>('')
   const [messages, setMessages] = useState<ModelMessage[]>([])
+  const [autoSaveStatus, setAutoSaveStatus] = useState<string>('')
 
   const editorRef = useRef<any>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const dirtyRef = useRef(dirty)
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
   const etagRef = useRef(remoteEtags)
@@ -373,6 +375,23 @@ function App() {
       setError(e?.message ?? 'Save failed.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const autoSave = async () => {
+    if (!dirtyRef.current) return
+    
+    try {
+      setAutoSaveStatus('Auto-saving...')
+      const content = editorRef.current?.getValue() ?? fileContents[currentFile] ?? ''
+      const data = await writeToStore(currentFile, content)
+      setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
+      setDirty(false)
+      setAutoSaveStatus('Auto-saved')
+      setTimeout(() => setAutoSaveStatus(''), 2000)
+    } catch (e: any) {
+      setAutoSaveStatus('Auto-save failed')
+      setTimeout(() => setAutoSaveStatus(''), 3000)
     }
   }
 
@@ -414,7 +433,13 @@ function App() {
     }
 
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      // Cleanup auto-save timeout
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -482,6 +507,16 @@ function App() {
     if (value !== undefined) {
       setFileContents(prev => ({ ...prev, [currentFile]: value }))
       setDirty(true)
+      
+      // Clear existing auto-save timeout
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+      }
+      
+      // Set new auto-save timeout (1 second after user stops typing)
+      autoSaveTimeoutRef.current = setTimeout(() => {
+        autoSave()
+      }, 1000)
     }
   }
 
@@ -538,6 +573,24 @@ function App() {
           return {
             content: [{ type: 'text', text: 'Please enter a message for the agent.' }],
             status: { type: 'incomplete', reason: 'other', error: 'empty-input' },
+          }
+        }
+
+        // CRITICAL: Auto-save immediately before agent processes the message
+        if (dirtyRef.current) {
+          console.log('Agent about to process message - triggering immediate auto-save...')
+          try {
+            const content = editorRef.current?.getValue() ?? fileContents[currentFile] ?? ''
+            const data = await writeToStore(currentFile, content)
+            setRemoteEtags(prev => ({ ...prev, [data.path]: data.etag }))
+            setDirty(false)
+            setAutoSaveStatus('Auto-saved before agent')
+            setTimeout(() => setAutoSaveStatus(''), 3000)
+            console.log('Immediate auto-save completed before agent processing')
+          } catch (e) {
+            console.error('Immediate auto-save failed before agent processing:', e)
+            setAutoSaveStatus('Auto-save failed before agent')
+            setTimeout(() => setAutoSaveStatus(''), 3000)
           }
         }
 
@@ -632,6 +685,14 @@ function App() {
             <div className="file-toolbar__left">
               <span className="file-path" title={currentFile}>{currentFile}</span>
               {dirty && <span className="badge badge--dirty">unsaved</span>}
+              {autoSaveStatus && (
+                <span 
+                  className="badge badge--autosave" 
+                  data-status={autoSaveStatus.includes('before agent') ? 'before-agent' : 'normal'}
+                >
+                  {autoSaveStatus}
+                </span>
+              )}
             </div>
             <div className="file-toolbar__right">
               <button className="btn" onClick={onReloadHandler} title="Reload from server">Reload</button>
